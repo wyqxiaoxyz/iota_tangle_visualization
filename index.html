@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+		    <title>Blox Tangle Visualizer - Watch the IOTA tangle in realtime</title>
+        <script src="vivagraph.js"></script>
+				<script src="//cdnjs.cloudflare.com/ajax/libs/clipboard.js/1.7.1/clipboard.min.js"></script>
+        <script type='text/javascript'>
+
+
+
+            /*global Viva*/
+            function onLoad() {
+								//set up logger
+								var dLogEl = document.getElementById('dLog');
+								dLog = function dLog(html){
+									dLogEl.removeChild(dLogEl.firstElementChild);
+									dLogEl.innerHTML += "<p>" + html + "</p>"
+								}
+
+                var graphGenerator = Viva.Graph.generator();
+
+								// donation = function donationReceived(tx){
+								// 	var donationTier = 0;
+								// 	var donationString = "";
+								// 	if(1 <= tx.value && tx.value < 1000000){
+								// 		donationTier = 1;
+								// 		if(tx.value < 1000){
+								// 			donationString = tx.value + "i";
+								// 		}else if(tx.value < 1000000){
+								// 			var ki = (tx.value/1000);
+								// 			donationString = parseInt(ki) + (ki % 1 == 0 ? "" : "." + ki.toString().split(".")[1].substring(0,1)) + "Ki"
+								// 		}
+								// 	}else if(1000000 <= tx.value && tx.value < 10000000){
+								// 		donationTier = 2;
+								// 		var mi = (tx.value/1000000);
+								// 		donationString = parseInt(mi) + (mi % 1 == 0 ? "" : "." + mi.toString().split(".")[1].substring(0,1)) + "Mi"
+								// 	}else if(10000000 <= tx.value && tx.value < 1000000000){
+								// 		donationTier = 3;
+								// 		var mi = (tx.value/1000000);
+								// 		donationString = parseInt(mi) + (mi % 1 == 0 ? "" : "." + mi.toString().split(".")[1].substring(0,1)) + "Mi"
+								// 	}else if(1000000000 <= tx.value){
+								// 		donationTier = 4;
+								// 		var gi = (tx.value/1000000000);
+								// 		donationString = parseInt(gi) + (gi % 1 == 0 ? "" : "." + gi.toString().split(".")[1].substring(0,1)) + "Gi"
+								// 	}
+
+								// 	dLog("<img src='img/donation-" + donationTier + ".png'>" + donationString);
+								// 	return donationTier;
+								// }
+
+								//Gap > springlength keeps it straight
+
+                //var graph = graphGenerator.randomNoLinks(500);
+                //var graph = graphGenerator.completeBipartite(100, 1);
+                //var graph = graphGenerator.complete(2);
+                //var graph = graphGenerator.grid(5, 5);
+                //vthuar graph = graphGenerator.balancedBinTree(10);
+                //var graph = graphGenerator.ladder(1000);
+                var graph = Viva.Graph.graph();
+								layout = Viva.Graph.Layout.forceDirected(graph, {
+									 springLength : 7,
+									 springCoeff : 0.00003,
+									 dragCoeff : 0.1,
+									 gravity : -0.08,
+									 theta : 0.8
+								});
+                //graph.addLink(1, 2);
+
+								const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+								const port = window.location.protocol === 'https:' ? 8081 : 8080;
+								const ws = new WebSocket(protocol + '//' + window.location.hostname + ':' + port);
+								ws.addEventListener('open', function(event){
+									dLog("Connection established");
+								})
+								ws.addEventListener('close', function(event){
+									dLog("Connection closed, reason: " + event.reason);
+								})
+								ws.addEventListener('message', function (event) {
+								    var tx = JSON.parse(event.data);
+										tx.donation = tx.address == "WJWFNLVTTFIFDFSBUWKBEFCHEEBTAXM9HVJJXJXV9DPVLSLPYLKU9CRFHESHEJZYIGWBNI9UYYWFXRJHD" && tx.value > 0 ? true : false;
+										var donationTier;
+										if(tx.donation && tx.value > 0){
+											donationTier = donation(tx)
+										}
+
+										var txNode = graph.getNode(tx.hash);
+										if(!graph.getNode(tx.hash)){
+											graph.addNode(tx.hash, {referenced: 0, tip: true, donation: tx.donation, value: tx.value, tier: donationTier})
+											txNode = graph.getNode(tx.hash);
+										}
+										txNode.data.ghost = false; //set false in case already existed
+
+										if(!graph.getNode(tx.trunkTransaction))
+											graph.addNode(tx.trunkTransaction, {ghost: true, referenced: 0})
+
+										if(!graph.getNode(tx.branchTransaction))
+											graph.addNode(tx.branchTransaction, {ghost: true, referenced: 0})
+
+
+										graph.addLink(tx.hash, tx.trunkTransaction);
+										graph.addLink(tx.hash, tx.branchTransaction);
+
+										var trunkNode = graph.getNode(tx.trunkTransaction);
+										var branchNode = graph.getNode(tx.branchTransaction);
+										trunkNode.data.referenced++;
+										branchNode.data.referenced++;
+										trunkNode.data.tip = false;
+										branchNode.data.tip = false;
+
+										//Place txNode appropriately
+										var txNodePlaceY = layout.getNodePosition(tx.hash).y;
+										if(!trunkNode.data.ghost){
+											txNodePlaceY = Math.min(layout.getNodePosition(tx.trunkTransaction).y - 30, txNodePlaceY)
+										}
+										if(!branchNode.data.ghost){
+											txNodePlaceY = Math.min(layout.getNodePosition(tx.branchTransaction).y - 30, txNodePlaceY)
+										}
+										layout.setNodePosition(tx.hash, layout.getNodePosition(tx.hash).x, txNodePlaceY);
+										//console.log("PlaceAt: ", txNodePlaceY, "trunk", layout.getNodePosition(tx.trunkTransaction).y, "branch", layout.getNodePosition(tx.branchTransaction).y)
+
+										//If ghosts, place them below tx
+										if(trunkNode.data.ghost && trunkNode.data.referenced == 1){
+											layout.setNodePosition(tx.trunkTransaction, layout.getNodePosition(tx.hash).x + 15, txNodePlaceY + 30);
+										}
+										if(branchNode.data.ghost && branchNode.data.referenced == 1){
+											layout.setNodePosition(tx.branchTransaction, layout.getNodePosition(tx.hash).x - 15, txNodePlaceY + 30);
+										}
+
+										//if(Math.random() > 0.5) setTimeout(() => graph.removeNode(tx.hash), 1000)
+
+								});
+
+								i = 1000;
+
+								/*
+								setInterval(() => {
+									//add ten nodes a second
+									var j = i++;
+									var rand1 = j - 1 - parseInt(Math.random()*5);
+									var rand2 = j - 6 - parseInt(Math.random()*5);
+									graph.addLink(rand1, j)
+									graph.addLink(rand2, j)
+									graph.addNode(j);
+									layout.setNodePosition(j,0,layout.getNodePosition(rand1).y - 30)
+								}, 100)*/
+
+                var graphics = Viva.Graph.View.webglGraphics();
+								graphics.link(function(link) {
+ 									 return Viva.Graph.View.webglLine(0x04a997ff);
+ 							 	}).node(function(node) {
+ 										return new WebglTangleNode(6, 5, 0xffffff, 0x704fc5, "img/donation-" + node.data.tier + ".png");
+ 							 	});
+
+								//var circleNode = buildWebglTangleNodeShader();
+								var imageNode = buildCombinedShader();
+								graphics.setNodeProgram(imageNode);
+
+                var renderer = Viva.Graph.View.renderer(graph,
+                    {
+                        layout     : layout,
+                        graphics   : graphics,
+                        renderLinks : true,
+                        prerender  : true
+                    });
+
+                renderer.run();
+            }
+        </script>
+				<script>
+				//keeeli note, not using idx, using cId and iId. Remove won't work
+				// Lets start from the easiest part - model object for node ui in webgl
+        function WebglTangleNode(imgSize, size, color, tipcolor, src) {
+            this.size = size;
+		        this.imgSize = imgSize;
+            this.color = color;
+						this.tipcolor = tipcolor;
+						this._texture = 0;
+						this._offset = 0;
+						this.src = src;
+        }
+
+				function buildCombinedShader() {
+						var tangleNode = buildWebglTangleNodeShader();
+						var imageNode = Viva.Graph.View.webglImageNodeProgram();
+						return {
+							numImages: 0,
+							numTangles: 0,
+							load: function(glContext){
+								tangleNode.load(glContext)
+								imageNode.load(glContext)
+							},
+							position: function(nodeUI, pos){
+								if(!nodeUI.node.data.donation)
+									tangleNode.position(nodeUI, pos)
+								else
+									imageNode.position(nodeUI, pos)
+							},
+							render: function(){
+								tangleNode.render()
+								imageNode.render()
+							},
+							updateTransform : function (newTransform) {
+								tangleNode.updateTransform(newTransform)
+								imageNode.updateTransform(newTransform)
+							},
+							updateSize : function (newCanvasWidth, newCanvasHeight) {
+									tangleNode.updateSize(newCanvasWidth, newCanvasHeight);
+									imageNode.updateSize(newCanvasWidth, newCanvasHeight);
+							},
+							createNode : function (node) {
+								if(!node.node.data.donation)
+									tangleNode.createNode(node)
+								else
+									imageNode.createNode(node)
+							},
+							removeNode : function (node) {
+								if(!node.node.data.donation)
+									tangleNode.removeNode(node)
+								else
+									imageNode.removeNode(node)
+							},
+							replaceProperties : function(replacedNode, newNode) {
+								if(!replacedNode.node.data.donation)
+									tangleNode.replaceProperties(replacedNode, newNode)
+								else
+									imageNode.replaceProperties(replacedNode, newNode)
+							}
+					}
+				}
+
+        // Next comes the hard part - implementation of API for custom shader
+        // program, used by webgl renderer:
+        function buildWebglTangleNodeShader() {
+            // For each primitive we need 4 attributes: x, y, color and size.
+            var ATTRIBUTES_PER_PRIMITIVE = 4,
+                nodesFS = [
+                'precision mediump float;',
+                'varying vec4 color;',
+
+                'void main(void) {',
+                '   if ((gl_PointCoord.x - 0.5) * (gl_PointCoord.x - 0.5) + (gl_PointCoord.y - 0.5) * (gl_PointCoord.y - 0.5) < 0.25) {',
+                '     gl_FragColor = color;',
+                '   } else {',
+                '     gl_FragColor = vec4(0);',
+                '   }',
+                '}'].join('\n'),
+                nodesVS = [
+                'attribute vec2 a_vertexPos;',
+                // Pack color and size into vector. First elemnt is color, second - size.
+                // Since it's floating point we can only use 24 bit to pack colors...
+                // thus alpha channel is dropped, and is always assumed to be 1.
+                'attribute vec2 a_customAttributes;',
+                'uniform vec2 u_screenSize;',
+                'uniform mat4 u_transform;',
+                'varying vec4 color;',
+
+                'void main(void) {',
+                '   gl_Position = u_transform * vec4(a_vertexPos/u_screenSize, 0, 1);',
+                '   gl_PointSize = a_customAttributes[1] * u_transform[0][0];',
+                '   float c = a_customAttributes[0];',
+                '   color.b = mod(c, 256.0); c = floor(c/256.0);',
+                '   color.g = mod(c, 256.0); c = floor(c/256.0);',
+                '   color.r = mod(c, 256.0); c = floor(c/256.0); color /= 255.0;',
+                '   color.a = 1.0;',
+                '}'].join('\n');
+
+            var program,
+                gl,
+                buffer,
+                locations,
+                utils,
+                nodes = new Float32Array(64),
+                nodesCount = 0,
+                canvasWidth, canvasHeight, transform,
+                isCanvasDirty,
+								nodesMap = {};
+
+            return {
+                /**
+                 * Called by webgl renderer to load the shader into gl context.
+                 */
+                load : function (glContext) {
+                    gl = glContext;
+                    webglUtils = Viva.Graph.webgl(glContext);
+
+                    program = webglUtils.createProgram(nodesVS, nodesFS);
+                    gl.useProgram(program);
+                    locations = webglUtils.getLocations(program, ['a_vertexPos', 'a_customAttributes', 'u_screenSize', 'u_transform']);
+
+                    gl.enableVertexAttribArray(locations.vertexPos);
+                    gl.enableVertexAttribArray(locations.customAttributes);
+
+                    buffer = gl.createBuffer();
+                },
+
+                /**
+                 * Called by webgl renderer to update node position in the buffer array
+                 *
+                 * @param nodeUI - data model for the rendered node (WebGLCircle in this case)
+                 * @param pos - {x, y} coordinates of the node.
+                 */
+                position : function (nodeUI, pos) {
+                    var idx = nodeUI.cId;
+                    nodes[idx * ATTRIBUTES_PER_PRIMITIVE] = pos.x;
+                    nodes[idx * ATTRIBUTES_PER_PRIMITIVE + 1] = -pos.y;
+                    nodes[idx * ATTRIBUTES_PER_PRIMITIVE + 2] = nodeUI.node.data.tip ? nodeUI.tipcolor : nodeUI.color;
+                    nodes[idx * ATTRIBUTES_PER_PRIMITIVE + 3] = nodeUI.size;
+                },
+
+                /**
+                 * Request from webgl renderer to actually draw our stuff into the
+                 * gl context. This is the core of our shader.
+                 */
+                render : function() {
+                    gl.useProgram(program);
+                    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+                    gl.bufferData(gl.ARRAY_BUFFER, nodes, gl.DYNAMIC_DRAW);
+
+                    if (isCanvasDirty) {
+                        isCanvasDirty = false;
+                        gl.uniformMatrix4fv(locations.transform, false, transform);
+                        gl.uniform2f(locations.screenSize, canvasWidth, canvasHeight);
+                    }
+
+                    gl.vertexAttribPointer(locations.vertexPos, 2, gl.FLOAT, false, ATTRIBUTES_PER_PRIMITIVE * Float32Array.BYTES_PER_ELEMENT, 0);
+                    gl.vertexAttribPointer(locations.customAttributes, 2, gl.FLOAT, false, ATTRIBUTES_PER_PRIMITIVE * Float32Array.BYTES_PER_ELEMENT, 2 * 4);
+
+                    gl.drawArrays(gl.POINTS, 0, nodesCount);
+                },
+
+                /**
+                 * Called by webgl renderer when user scales/pans the canvas with nodes.
+                 */
+                updateTransform : function (newTransform) {
+                    transform = newTransform;
+                    isCanvasDirty = true;
+                },
+
+                /**
+                 * Called by webgl renderer when user resizes the canvas with nodes.
+                 */
+                updateSize : function (newCanvasWidth, newCanvasHeight) {
+                    canvasWidth = newCanvasWidth;
+                    canvasHeight = newCanvasHeight;
+                    isCanvasDirty = true;
+                },
+
+                /**
+                 * Called by webgl renderer to notify us that the new node was created in the graph
+                 */
+                createNode : function (node) {
+										node.cId = nodesCount;
+										nodesMap[node.cId] = node;
+                    nodes = webglUtils.extendArray(nodes, nodesCount, ATTRIBUTES_PER_PRIMITIVE);
+                    nodesCount += 1;
+                },
+
+                /**
+                 * Called by webgl renderer to notify us that the node was removed from the graph
+                 */
+                removeNode : function (node) {
+										var cId = node.cId;
+                    if (nodesCount > 0) { nodesCount -=1; }
+										//keeeli also swap ids
+
+                    if (node.cId < nodesCount && nodesCount > 0) {
+                        // we do not really delete anything from the buffer.
+                        // Instead we swap deleted node with the "last" node in the
+                        // buffer and decrease marker of the "last" node. Gives nice O(1)
+                        // performance, but make code slightly harder than it could be:
+                        webglUtils.copyArrayPart(nodes, node.cId*ATTRIBUTES_PER_PRIMITIVE, nodesCount*ATTRIBUTES_PER_PRIMITIVE, ATTRIBUTES_PER_PRIMITIVE);
+												nodesMap[cId] = nodesMap[nodesCount];
+												nodesMap[nodesCount].cId = cId;
+										}
+                },
+
+                /**
+                 * This method is called by webgl renderer when it changes parts of its
+                 * buffers. We don't use it here, but it's needed by API (see the comment
+                 * in the removeNode() method)
+                 */
+                replaceProperties : function(replacedNode, newNode) {
+								},
+            };
+        }
+				</script>
+        <style type='text/css'>
+            body {
+                height: 100%;
+                width: 100%;
+                position: absolute;
+                overflow: hidden;
+								background: url(img/space-bg.jpg) no-repeat center center fixed;
+								background-size: cover;
+
+            }
+            canvas {
+                width: 100%;
+                height: 100%;
+            }
+
+						#btmLeftContainer {
+							position:fixed;
+							bottom:5px;
+							right:5px;
+						}
+						#btmLeftContainer #dLog {
+							color: #04a997;
+							font-size: 10px;
+							text-align:right;
+							font-family:monospace;
+						}
+						#btmLeftContainer #dLog p img {
+							height:10px;
+							width:10px;
+							margin-right: 3px;
+							opacity: 0.5;
+						}
+						#btmLeftContainer #dLog p:nth-of-type(1) {opacity:0.25;}
+						#btmLeftContainer #dLog p:nth-of-type(2) {opacity:0.55;}
+						#btmLeftContainer #dLog p:nth-of-type(3) {opacity:0.85;}
+						#donations #address {
+							border: 2px solid rgba(255,255,255,0.65);
+							background-color: rgba(0,0,0,0.5);
+							color:rgba(255,255,255,0.75);
+							border-radius: 5px;
+							transition: width 0.2s ease-in;
+							width: 40px;
+							display: flex;
+							align-items: center;
+							overflow:hidden;
+							cursor:pointer;
+							float:right;
+						}
+						#donations #address img {
+							width:30px;
+							height:30px;
+							margin: 5px 5px 5px 5px;
+						}
+						#donations #address span {
+							padding-right:5px;
+						}
+						#donations #list {
+
+						}
+        </style>
+    </head>
+    <body onload="onLoad()">
+      <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-100823628-2', 'auto');
+  ga('send', 'pageview');
+
+      </script>
+			<div id="btmLeftContainer">
+				<div id="dLog">
+					<p></p>
+					<p></p>
+					<p>Donations show up as <img src='img/donation-1.png'> in the tangle</p>
+				</div>
+				<div id="donations">
+					<div id="address">
+						<img src="img/donation-1.png"/ id="addressImg"><span id="addressText" data-clipboard-action="copy" data-clipboard-target="#addressText">WJWFNLVTTFIFDFSBUWKBEFCHEEBTAXM9HVJJXJXV9DPVLSLPYLKU9CRFHESHEJZYIGWBNI9UYYWFXRJHDEXSGUZKKD</span>
+					</div>
+				</div>
+			</div>
+			<script>
+
+				var clipboard = new Clipboard('#addressText');
+				clipboard.on('success', function(e) {e.clearSelection();dLog("Address copied to clipboard")});
+				clipboard.on('error', function(e) {dLog("Address copy failed")});
+
+				var btmLeftEl = document.getElementById('btmLeftContainer');
+				var donationAddressEl = document.getElementById('address');
+				var donationSpanEl = document.getElementById('addressText');
+				var donationImgEl = document.getElementById('addressImg');
+				donationAddressEl.onmouseover = function(){
+					donationAddressEl.style.width = (donationImgEl.offsetWidth + 10 + donationSpanEl.offsetWidth) + "px";
+				}
+				donationAddressEl.onmouseout = function(){
+					donationAddressEl.style.width = "40px";
+				}
+				btmLeftContainer.onmousedown = function(e){event.stopPropagation();}
+			</script>
+    </body>
+</html>
